@@ -9,9 +9,10 @@ ressemble à un robot serait renvoyé ici en boucle par nginx.
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from html import escape
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from ..models.models import Event, Slot
 from .export_img import JOURS, MOIS, _heure
@@ -27,6 +28,34 @@ TEXTES_GENERIQUES: Tuple[str, str] = (
 def date_courte(dt: datetime) -> str:
     """« Samedi 31 octobre » — sans l'année, inutile pour un événement proche."""
     return f"{JOURS[dt.weekday()].capitalize()} {dt.day} {MOIS[dt.month - 1]}"
+
+
+def ligne_date_apercu(event: Event, slots: List[Slot]) -> str:
+    """Ligne(s) de date dessinée(s) sur l'image. `slots` triés par heure_debut."""
+    if not slots:
+        return date_courte(event.date)
+    debut, fin = slots[0].heure_debut, slots[-1].heure_fin
+    return f"{date_courte(debut)}\n{_heure(debut)} → {_heure(fin)}"
+
+
+def version_image(
+    nom: str, ligne_date: str, logo_png: Optional[bytes], theme: Optional[dict]
+) -> str:
+    """Empreinte courte des entrées qui déterminent l'image d'aperçu.
+
+    Ajoutée en `?v=` à l'URL de l'image : elle change dès que l'image change,
+    ce qui force les robots à ignorer leur cache.
+    """
+    h = hashlib.sha256()
+    for champ in (
+        nom.encode(),
+        ligne_date.encode(),
+        b"\x01" if logo_png is None else logo_png,
+        b"\x01" if theme is None else repr(sorted(theme.items())).encode(),
+    ):
+        h.update(champ)
+        h.update(b"\x00")
+    return h.hexdigest()[:12]
 
 
 def textes_apercu(event: Event, slots: List[Slot]) -> Tuple[str, str]:
