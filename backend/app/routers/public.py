@@ -21,12 +21,13 @@ from ..services import public_poll
 from ..services.apercu import (
     COULEUR_LATEB,
     TEXTES_GENERIQUES,
-    date_courte,
+    ligne_date_apercu,
     page_apercu_html,
     textes_apercu,
+    version_image,
 )
 from ..services.apercu_img import rendre_apercu_png
-from ..services.export_img import LATEB_THEME, _heure
+from ..services.export_img import LATEB_THEME
 from ..services.logo_theme import hex_color, logo_et_theme
 
 router = APIRouter(prefix="/api/public", tags=["public"])
@@ -109,10 +110,12 @@ def apercu_poll(token: str, db: Session = Depends(get_db)):
         titre, description = TEXTES_GENERIQUES
         url, image_url, couleur = f"{base}/", f"{base}/api/public/apercu.png", COULEUR_LATEB
     else:
-        titre, description = textes_apercu(event, _slots_tries(db, event))
-        _, theme = logo_et_theme(db, event)
+        slots = _slots_tries(db, event)
+        titre, description = textes_apercu(event, slots)
+        logo_png, theme = logo_et_theme(db, event)
+        v = version_image(event.nom, ligne_date_apercu(event, slots), logo_png, theme)
         url = f"{base}/dispo/{token}"
-        image_url = f"{base}/api/public/polls/{token}/apercu.png"
+        image_url = f"{base}/api/public/polls/{token}/apercu.png?v={v}"
         couleur = hex_color((theme or LATEB_THEME)["frame"])
     return HTMLResponse(
         page_apercu_html(titre, description, url, image_url, couleur),
@@ -123,12 +126,7 @@ def apercu_poll(token: str, db: Session = Depends(get_db)):
 @router.get("/polls/{token}/apercu.png")
 def apercu_poll_png(token: str, db: Session = Depends(get_db)):
     event = _get_event_by_token(db, token)
-    slots = _slots_tries(db, event)
-    if slots:
-        debut, fin = slots[0].heure_debut, slots[-1].heure_fin
-        ligne_date = f"{date_courte(debut)}\n{_heure(debut)} → {_heure(fin)}"
-    else:
-        ligne_date = date_courte(event.date)
+    ligne_date = ligne_date_apercu(event, _slots_tries(db, event))
     logo_png, theme = logo_et_theme(db, event)
     png = rendre_apercu_png(event.nom, ligne_date, logo_png, theme)
     return Response(content=png, media_type="image/png", headers=_CACHE_IMAGE)

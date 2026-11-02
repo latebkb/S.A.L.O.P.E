@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import re
 from datetime import datetime, timedelta
 
 import pytest
@@ -9,7 +10,12 @@ from PIL import Image, ImageDraw
 
 from app.config import settings
 from app.models.models import Event, EventTypeEnum, Logo, Slot
-from app.services.apercu import page_apercu_html, textes_apercu
+from app.services.apercu import (
+    ligne_date_apercu,
+    page_apercu_html,
+    textes_apercu,
+    version_image,
+)
 from app.services.apercu_img import (
     LARGEUR,
     _ajuster_nom,
@@ -48,6 +54,41 @@ def test_textes_apercu_minutes():
     ev = Event(nom="Afterwork", date=d)
     slots = [Slot(heure_debut=d, heure_fin=datetime(2026, 11, 5, 21, 0))]
     assert textes_apercu(ev, slots)[1] == "Jeudi 5 novembre · 18h30 → 21h."
+
+
+def test_ligne_date_apercu_avec_creneaux():
+    d = datetime(2026, 11, 5, 18, 30)
+    ev = Event(nom="Afterwork", date=d)
+    slots = [Slot(heure_debut=d, heure_fin=datetime(2026, 11, 5, 21, 0))]
+    assert ligne_date_apercu(ev, slots) == "Jeudi 5 novembre\n18h30 → 21h"
+    assert ligne_date_apercu(ev, []) == "Jeudi 5 novembre"
+
+
+def test_version_image_stable():
+    theme = {"frame": (1, 2, 3)}
+    assert version_image("N", "D", b"logo", theme) == version_image("N", "D", b"logo", dict(theme))
+
+
+def test_version_image_change_si_logo():
+    assert version_image("N", "D", None, None) != version_image("N", "D", b"a", None)
+    assert version_image("N", "D", b"a", None) != version_image("N", "D", b"b", None)
+
+
+def test_version_image_change_si_nom_date_ou_theme():
+    base = version_image("N", "D", b"a", {"frame": (1, 2, 3)})
+    assert version_image("N2", "D", b"a", {"frame": (1, 2, 3)}) != base
+    assert version_image("N", "D2", b"a", {"frame": (1, 2, 3)}) != base
+    assert version_image("N", "D", b"a", {"frame": (1, 2, 4)}) != base
+    assert version_image("N", "D", b"a", None) != base
+
+
+def test_version_image_sans_collision_par_concatenation():
+    assert version_image("ab", "c", None, None) != version_image("a", "bc", None, None)
+
+
+def test_version_image_longueur():
+    v = version_image("N", "D", b"a", None)
+    assert len(v) == 12 and int(v, 16) >= 0
 
 
 def test_page_apercu_html_balises_og():
@@ -178,8 +219,47 @@ def test_apercu_html_token_connu(client, db_session, base_url):
     assert 'content="Soirée poll — donne tes dispos"' in res.text
     assert 'content="Mardi 1 septembre · 20h → 22h."' in res.text
     assert f'content="https://salope.lateb.eu/dispo/{token}"' in res.text
-    assert f'content="https://salope.lateb.eu/api/public/polls/{token}/apercu.png"' in res.text
+    assert re.search(
+        rf'content="https://salope\.lateb\.eu/api/public/polls/{token}/apercu\.png\?v=[0-9a-f]{{12}}"',
+        res.text,
+    )
     assert 'name="theme-color" content="#ff6200"' in res.text
+
+
+def _version(client, token) -> str:
+    res = client.get(f"/api/public/polls/{token}/apercu")
+    m = re.search(r"apercu\.png\?v=([0-9a-f]{12})", res.text)
+    assert m, res.text
+    return m.group(1)
+
+
+def test_apercu_html_version_stable(client, db_session, base_url):
+    token, _ = _event_avec_lien(client, db_session)
+    assert _version(client, token) == _version(client, token)
+
+
+def test_apercu_html_version_change_avec_logo(client, db_session, base_url):
+    token, event = _event_avec_lien(client, db_session)
+    avant = _version(client, token)
+    logo = Logo(nom="L", contenu=_logo_png(), utiliser_couleurs=False)
+    db_session.add(logo)
+    db_session.flush()
+    event.logo_id = logo.id
+    db_session.flush()
+    assert _version(client, token) != avant
+
+
+def test_apercu_html_version_change_avec_utiliser_couleurs(client, db_session, base_url):
+    token, event = _event_avec_lien(client, db_session)
+    logo = Logo(nom="L", contenu=_logo_png((200, 20, 20)), utiliser_couleurs=False)
+    db_session.add(logo)
+    db_session.flush()
+    event.logo_id = logo.id
+    db_session.flush()
+    sans = _version(client, token)
+    logo.utiliser_couleurs = True
+    db_session.flush()
+    assert _version(client, token) != sans
 
 
 def test_apercu_html_inscriptions_fermees_identique(client, db_session, base_url):
@@ -199,7 +279,7 @@ def test_apercu_html_token_inconnu(client, base_url):
 
 def test_apercu_png_token_connu(client, db_session):
     token, _ = _event_avec_lien(client, db_session)
-    res = client.get(f"/api/public/polls/{token}/apercu.png")
+    res = client.get(f"/api/public/polls/{token}/apercu.png?v=nimportequoi")
     assert res.status_code == 200
     assert res.headers["content-type"] == "image/png"
     assert res.headers["cache-control"] == "public, max-age=3600"
