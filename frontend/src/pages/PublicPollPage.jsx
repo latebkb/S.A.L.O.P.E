@@ -10,6 +10,25 @@ const STATUTS = [
 ]
 
 const NOM_KEY = 'salope_dispo_nom'
+// Réponses envoyées, mémorisées par événement (le token identifie l'événement)
+const reponsesKey = (token) => `salope_dispo_reponses_${token}`
+const STATUT_VALUES = STATUTS.map((s) => s.value)
+
+/** Lit les réponses mémorisées et ne garde que celles des créneaux encore existants. */
+const lireReponsesMemorisees = (token, slots) => {
+  try {
+    const stockees = JSON.parse(localStorage.getItem(reponsesKey(token)) || 'null')
+    if (!stockees || typeof stockees !== 'object') return {}
+    // Les clés JSON sont des strings, les slot.id des nombres : on réindexe par slot.id
+    return Object.fromEntries(
+      slots
+        .filter((s) => STATUT_VALUES.includes(stockees[String(s.id)]))
+        .map((s) => [s.id, stockees[String(s.id)]])
+    )
+  } catch {
+    return {} // stockage indisponible ou valeur corrompue
+  }
+}
 
 const CLOSED_MESSAGES = {
   closed: 'Les inscriptions sont fermées pour cet événement.',
@@ -34,6 +53,7 @@ export default function PublicPollPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState(null) // null | 'matched' | 'pending'
+  const [prerempli, setPrerempli] = useState(false)
 
   useEffect(() => {
     publicApi
@@ -42,6 +62,17 @@ export default function PublicPollPage() {
       .catch(() => setNotFound(true))
       .finally(() => setLoading(false))
   }, [token])
+
+  // Re-coche les réponses envoyées depuis cet appareil, au chargement du sondage
+  useEffect(() => {
+    if (!poll) return
+    // Ne pas écraser une saisie déjà commencée
+    if (Object.keys(reponses).length > 0) return
+    const memorisees = lireReponsesMemorisees(token, poll.slots)
+    if (Object.keys(memorisees).length === 0) return
+    setReponses(memorisees)
+    setPrerempli(true)
+  }, [poll]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const eventDate = useMemo(() => {
     if (!poll) return ''
@@ -72,6 +103,9 @@ export default function PublicPollPage() {
       }
       const res = await publicApi.submit(token, payload)
       try { localStorage.setItem(NOM_KEY, payload.nom) } catch { /* stockage indisponible */ }
+      const reponsesEnvoyees = Object.fromEntries(payload.reponses.map((r) => [r.creneau_id, r.statut]))
+      try { localStorage.setItem(reponsesKey(token), JSON.stringify(reponsesEnvoyees)) } catch { /* stockage indisponible */ }
+      setPrerempli(false)
       setResult(res.status)
     } catch (err) {
       const status = err.response?.status
@@ -182,6 +216,11 @@ export default function PublicPollPage() {
               ))}
             </div>
           </div>
+          {prerempli && (
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
+              Tes réponses précédentes ont été pré-remplies depuis cet appareil.
+            </p>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {poll.slots.map((slot) => (
               <div
