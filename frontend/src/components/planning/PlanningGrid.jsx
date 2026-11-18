@@ -10,6 +10,7 @@ export default function PlanningGrid({
   slots,
   members,
   assignments,
+  shiftsCustom = [],
   affinities,
   availabilities = [],
   excludedMemberIds = new Set(),
@@ -62,19 +63,14 @@ export default function PlanningGrid({
     asgMap[`${a.membre_id}-${a.creneau_id}`] = a
   }
 
-  const assignedMemberIds = new Set(assignments.map((a) => a.membre_id))
-  const visibleMembers = members
-    .filter((m) => assignedMemberIds.has(m.id) || extraMemberIds.has(m.id))
-    .sort((a, b) => a.nom.localeCompare(b.nom))
-
-  // Members addable manually: respondents first, then the rest
-  const respondentIds = useMemo(
-    () => new Set(availabilities.map((a) => a.membre_id)),
-    [availabilities]
+  const shiftsById = useMemo(
+    () => Object.fromEntries(shiftsCustom.map((sc) => [sc.id, sc])),
+    [shiftsCustom]
   )
+  const shiftsAtSlot = (slotId) => shiftsCustom.filter((sc) => sc.creneau_id === slotId)
+  const customNames = [...new Set(shiftsCustom.map((sc) => sc.nom))]
 
-  // Membres avec au moins un créneau dispo (yes/maybe) — ceux qui n'ont répondu
-  // que « pas dispo » n'apportent rien à la grille
+  // Membres avec au moins un créneau dispo (yes/maybe)
   const availableIds = useMemo(
     () =>
       new Set(
@@ -85,19 +81,24 @@ export default function PlanningGrid({
     [availabilities]
   )
 
-  // Planning vide : sans affectation, pré-remplir les lignes avec les
-  // répondant·e·s disponibles non exclus (onglet Participants) pour permettre
-  // la construction manuelle du planning sans passer par la génération
-  useEffect(() => {
-    if (disabled || assignments.length > 0 || slots.length === 0) return
-    setExtraMemberIds((prev) => {
-      const next = new Set(prev)
-      for (const id of availableIds) {
-        if (!excludedMemberIds.has(id)) next.add(id)
-      }
-      return next.size === prev.size ? prev : next
-    })
-  }, [disabled, assignments.length, slots.length, availableIds, excludedMemberIds])
+  const respondentIds = useMemo(
+    () => new Set(availabilities.map((a) => a.membre_id)),
+    [availabilities]
+  )
+
+  // Tous les répondant·e·s non exclus (onglet Participants) sont affichés, y
+  // compris ceux qui ont répondu « pas dispo » partout : le bureau peut leur
+  // ajouter des heures s'ils se rendent dispo après coup. Les non-répondants
+  // restent ajoutables via « Ajouter un membre ». Dispos d'abord, puis alpha.
+  const assignedMemberIds = new Set(assignments.map((a) => a.membre_id))
+  const visibleMembers = members
+    .filter((m) =>
+      assignedMemberIds.has(m.id) || extraMemberIds.has(m.id) ||
+      (respondentIds.has(m.id) && !excludedMemberIds.has(m.id))
+    )
+    .sort((a, b) =>
+      (availableIds.has(b.id) - availableIds.has(a.id)) || a.nom.localeCompare(b.nom)
+    )
   const visibleIds = new Set(visibleMembers.map((m) => m.id))
   const addableMembers = members
     .filter((m) => !visibleIds.has(m.id))
@@ -107,8 +108,10 @@ export default function PlanningGrid({
     )
 
   const slotTotals = {}
+  const customTotals = {}
   for (const a of assignments) {
-    slotTotals[a.creneau_id] = (slotTotals[a.creneau_id] || 0) + 1
+    if (a.shift_custom_id == null) slotTotals[a.creneau_id] = (slotTotals[a.creneau_id] || 0) + 1
+    else customTotals[a.shift_custom_id] = (customTotals[a.shift_custom_id] || 0) + 1
   }
 
   // Heures par membre — convention du système : 1 créneau = 1 heure
@@ -124,14 +127,18 @@ export default function PlanningGrid({
   const getCellClass = (asgn, memberId, slotId) => {
     const classes = []
     if (asgn) {
-      classes.push(asgn.type === 'respo_bar' ? 'cell-respo' : 'cell-staff')
+      classes.push(
+        asgn.shift_custom_id != null ? 'cell-custom' : asgn.type === 'respo_bar' ? 'cell-respo' : 'cell-staff'
+      )
+      const dispo = availMap[`${memberId}-${slotId}`]
+      if (dispo !== 'yes' && dispo !== 'maybe') classes.push('cell-forced')
       if (dragging?.asgnId === asgn.id) classes.push('cell-drag-source')
     } else {
       const dispo = availMap[`${memberId}-${slotId}`]
       if (dispo === 'yes') classes.push('cell-dispo-yes')
       else if (dispo === 'maybe') classes.push('cell-dispo-maybe')
       else if (dispo === 'no') classes.push('cell-dispo-no')
-      if (dragging && dispo !== 'no') classes.push('cell-drop-ok')
+      if (dragging) classes.push('cell-drop-ok')
     }
     if (
       highlight &&
@@ -145,6 +152,7 @@ export default function PlanningGrid({
 
   const getCellLabel = (asgn) => {
     if (!asgn) return ''
+    if (asgn.shift_custom_id != null) return shiftsById[asgn.shift_custom_id]?.nom ?? 'Autre'
     if (asgn.type === 'respo_bar') return 'Respo'
     return 'Staff'
   }
@@ -152,22 +160,16 @@ export default function PlanningGrid({
   const handleCellClick = (e, memberId, slotId) => {
     if (disabled) return
     setCellError(null)
-    const key = `${memberId}-${slotId}`
-    if (!asgMap[key] && availMap[key] === 'no') {
-      const rect = e.currentTarget.getBoundingClientRect()
-      setEditCell(null)
-      setCellError({ memberId, slotId, ...popupPos(rect, 280, 32), message: 'Ce membre est indisponible sur ce créneau' })
-      return
-    }
     if (editCell?.memberId === memberId && editCell?.slotId === slotId) {
       setEditCell(null)
       return
     }
     const rect = e.currentTarget.getBoundingClientRect()
-    setEditCell({ memberId, slotId, ...popupPos(rect, 140, 170) })
+    setEditCell({ memberId, slotId, ...popupPos(rect, 140, 170 + 34 * shiftsAtSlot(slotId).length) })
   }
 
-  const handleAssign = async (memberId, slotId, type) => {
+  // shiftId : null = bar, sinon id du shift custom sur ce créneau
+  const handleAssign = async (memberId, slotId, type, shiftId = null) => {
     const key = `${memberId}-${slotId}`
     setCellLoading(key)
     setCellError(null)
@@ -176,15 +178,21 @@ export default function PlanningGrid({
       if (type === 'none') {
         if (existing) {
           await eventsApi.deleteAssignment(eventId, existing.id)
-          onUndoableAction?.([{ op: 'add', creneau_id: slotId, membre_id: memberId, type: existing.type }])
+          onUndoableAction?.([{
+            op: 'add', creneau_id: slotId, membre_id: memberId, type: existing.type,
+            shift_custom_id: existing.shift_custom_id,
+          }])
         }
       } else if (existing) {
-        await eventsApi.updateAssignment(eventId, existing.id, { type })
-        if (existing.type !== type) {
-          onUndoableAction?.([{ op: 'update', creneau_id: slotId, membre_id: memberId, type: existing.type }])
+        await eventsApi.updateAssignment(eventId, existing.id, { type, shift_custom_id: shiftId })
+        if (existing.type !== type || (existing.shift_custom_id ?? null) !== shiftId) {
+          onUndoableAction?.([{
+            op: 'update', creneau_id: slotId, membre_id: memberId, type: existing.type,
+            shift_custom_id: existing.shift_custom_id,
+          }])
         }
       } else {
-        await eventsApi.addAssignment(eventId, { creneau_id: slotId, membre_id: memberId, type })
+        await eventsApi.addAssignment(eventId, { creneau_id: slotId, membre_id: memberId, type, shift_custom_id: shiftId })
         onUndoableAction?.([{ op: 'delete', creneau_id: slotId, membre_id: memberId }])
       }
       const fresh = await eventsApi.listAssignments(eventId)
@@ -205,18 +213,27 @@ export default function PlanningGrid({
     const key = `${toMemberId}-${toSlotId}`
     setCellLoading(key)
     setCellError(null)
+    // Shift custom : suit le shift de même nom sur le créneau cible, sinon bar
+    const fromShift = d.shiftId != null ? shiftsById[d.shiftId] : null
+    const toShiftId = fromShift
+      ? (shiftsAtSlot(toSlotId).find((sc) => sc.nom === fromShift.nom)?.id ?? null)
+      : null
     try {
       await eventsApi.deleteAssignment(eventId, d.asgnId)
       try {
-        await eventsApi.addAssignment(eventId, { creneau_id: toSlotId, membre_id: toMemberId, type: d.type })
+        await eventsApi.addAssignment(eventId, {
+          creneau_id: toSlotId, membre_id: toMemberId, type: d.type, shift_custom_id: toShiftId,
+        })
         onUndoableAction?.([
           { op: 'delete', creneau_id: toSlotId, membre_id: toMemberId },
-          { op: 'add', creneau_id: d.fromSlotId, membre_id: d.memberId, type: d.type },
+          { op: 'add', creneau_id: d.fromSlotId, membre_id: d.memberId, type: d.type, shift_custom_id: d.shiftId },
         ])
       } catch (err) {
         // rollback best-effort : remettre l'affectation d'origine
         await eventsApi
-          .addAssignment(eventId, { creneau_id: d.fromSlotId, membre_id: d.memberId, type: d.type })
+          .addAssignment(eventId, {
+            creneau_id: d.fromSlotId, membre_id: d.memberId, type: d.type, shift_custom_id: d.shiftId,
+          })
           .catch(() => {})
         throw err
       }
@@ -323,7 +340,7 @@ export default function PlanningGrid({
                     const asgn = asgMap[`${member.id}-${slot.id}`]
                     const cellKey = `${member.id}-${slot.id}`
                     const isLoading = cellLoading === cellKey
-                    const dropOk = !disabled && dragging && !asgn && availMap[cellKey] !== 'no'
+                    const dropOk = !disabled && dragging && !asgn
                     return (
                       <td
                         key={slot.id}
@@ -334,7 +351,7 @@ export default function PlanningGrid({
                           !disabled && asgn
                             ? (e) => {
                                 e.dataTransfer.effectAllowed = 'move'
-                                setDragging({ asgnId: asgn.id, memberId: member.id, fromSlotId: slot.id, type: asgn.type })
+                                setDragging({ asgnId: asgn.id, memberId: member.id, fromSlotId: slot.id, type: asgn.type, shiftId: asgn.shift_custom_id ?? null })
                               }
                             : undefined
                         }
@@ -369,6 +386,19 @@ export default function PlanningGrid({
                 })}
                 <td className="col-hours" />
               </tr>
+              {customNames.map((nom) => (
+                <tr key={nom}>
+                  <td>{nom} / max</td>
+                  {slots.map((s) => {
+                    const sc = shiftsAtSlot(s.id).find((x) => x.nom === nom)
+                    if (!sc) return <td key={s.id} />
+                    const n = customTotals[sc.id] || 0
+                    const cls = n < sc.max_personnes ? 'foot-under' : n > sc.max_personnes ? 'foot-over' : 'foot-full'
+                    return <td key={s.id} className={cls}>{n}/{sc.max_personnes}</td>
+                  })}
+                  <td className="col-hours" />
+                </tr>
+              ))}
             </tfoot>
           </table>
         </div>
@@ -409,6 +439,15 @@ export default function PlanningGrid({
             <button onClick={() => handleAssign(editCell.memberId, editCell.slotId, 'staff')} style={editorBtn('var(--green-soft)', 'var(--green)')}>
               Staff
             </button>
+            {shiftsAtSlot(editCell.slotId).map((sc) => (
+              <button
+                key={sc.id}
+                onClick={() => handleAssign(editCell.memberId, editCell.slotId, 'staff', sc.id)}
+                style={editorBtn('var(--accent-soft)', 'var(--accent)')}
+              >
+                {sc.nom}
+              </button>
+            ))}
             {event.type === 'soiree' && (
               <button onClick={() => handleAssign(editCell.memberId, editCell.slotId, 'respo_bar')} style={editorBtn('var(--red-soft)', 'var(--red)')}>
                 Respo bar

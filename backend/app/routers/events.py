@@ -22,6 +22,7 @@ from ..models.models import (
     Member,
     PendingSubmission,
     ResponsableBar,
+    ShiftCustom,
     Slot,
     StatsMemberHeureRelative,
 )
@@ -51,6 +52,9 @@ from ..schemas.schemas import (
     PublicResolveRequest,
     RespoBarList,
     RespoBarRead,
+    ShiftCustomCreate,
+    ShiftCustomRead,
+    ShiftCustomUpdate,
     SlotRead,
     SlotUpdate,
     WarningItem,
@@ -64,7 +68,6 @@ from ..services.event_creation import (
 )
 from ..services import public_poll
 from ..services.scheduler import (
-    check_manual_assignment,
     generate_proposals,
     generate_schedule,
 )
@@ -169,13 +172,25 @@ def duplicate_event(
 
     # Décalage en jours entiers : les créneaux passant minuit restent cohérents
     delta = timedelta(days=(payload.date.date() - src.date.date()).days)
+    new_slot_ids = {}
     for slot in db.query(Slot).filter(Slot.evenement_id == event_id).all():
-        db.add(Slot(
+        copy = Slot(
             evenement_id=new_event.id,
             heure_debut=slot.heure_debut + delta,
             heure_fin=slot.heure_fin + delta,
             heure_relative=slot.heure_relative,
             max_personnes=slot.max_personnes,
+        )
+        db.add(copy)
+        db.flush()
+        new_slot_ids[slot.id] = copy.id
+
+    for sc in db.query(ShiftCustom).filter(ShiftCustom.evenement_id == event_id).all():
+        db.add(ShiftCustom(
+            evenement_id=new_event.id,
+            creneau_id=new_slot_ids[sc.creneau_id],
+            nom=sc.nom,
+            max_personnes=sc.max_personnes,
         ))
 
     db.commit()
@@ -453,6 +468,126 @@ def delete_slot(
 
 
 # ---------------------------------------------------------------------------
+# Shifts custom (postes parallèles au bar, ex. entrée)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{event_id}/shifts-custom", response_model=List[ShiftCustomRead])
+def list_shifts_custom(
+    event_id: int,
+    db: Session = Depends(get_db),
+    _: Member = Depends(get_current_member),
+):
+    _get_event_or_404(db, event_id)
+    return (
+        db.query(ShiftCustom)
+        .filter(ShiftCustom.evenement_id == event_id)
+        .order_by(ShiftCustom.nom, ShiftCustom.creneau_id)
+        .all()
+    )
+
+
+@router.post(
+    "/{event_id}/shifts-custom",
+    response_model=List[ShiftCustomRead],
+    status_code=status.HTTP_201_CREATED,
+)
+def create_shifts_custom(
+    event_id: int,
+    payload: ShiftCustomCreate,
+    db: Session = Depends(get_db),
+    _: Member = Depends(require_bureau),
+):
+    """Crée un shift custom sur chacun des créneaux donnés (doublons ignorés)."""
+    _get_event_or_404(db, event_id)
+    nom = payload.nom.strip()
+    if not nom:
+        raise HTTPException(status_code=422, detail="Nom requis")
+    slot_ids = {
+        s.id for s in db.query(Slot).filter(Slot.evenement_id == event_id).all()
+    }
+    if not set(payload.creneau_ids) <= slot_ids:
+        raise HTTPException(
+            status_code=400, detail="Créneau n'appartenant pas à cet événement"
+        )
+    existing = {
+        sc.creneau_id
+        for sc in db.query(ShiftCustom).filter(
+            ShiftCustom.evenement_id == event_id, ShiftCustom.nom == nom
+        )
+    }
+    created = []
+    for cid in dict.fromkeys(payload.creneau_ids):
+        if cid in existing:
+            continue
+        sc = ShiftCustom(
+            evenement_id=event_id,
+            creneau_id=cid,
+            nom=nom,
+            max_personnes=payload.max_personnes,
+        )
+        db.add(sc)
+        created.append(sc)
+    db.commit()
+    for sc in created:
+        db.refresh(sc)
+    return created
+
+
+def _get_shift_or_404(db: Session, event_id: int, shift_id: int) -> ShiftCustom:
+    sc = db.query(ShiftCustom).filter(
+        ShiftCustom.id == shift_id, ShiftCustom.evenement_id == event_id
+    ).first()
+    if not sc:
+        raise HTTPException(status_code=404, detail="Shift custom introuvable")
+    return sc
+
+
+@router.put("/{event_id}/shifts-custom/{shift_id}", response_model=ShiftCustomRead)
+def update_shift_custom(
+    event_id: int,
+    shift_id: int,
+    payload: ShiftCustomUpdate,
+    db: Session = Depends(get_db),
+    _: Member = Depends(require_bureau),
+):
+    sc = _get_shift_or_404(db, event_id, shift_id)
+    sc.max_personnes = payload.max_personnes
+    db.commit()
+    db.refresh(sc)
+    return sc
+
+
+@router.delete(
+    "/{event_id}/shifts-custom/{shift_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_shift_custom(
+    event_id: int,
+    shift_id: int,
+    db: Session = Depends(get_db),
+    _: Member = Depends(require_bureau),
+):
+    event = _get_event_or_404(db, event_id)
+    if event.statut == EventStatutEnum.publie:
+        raise HTTPException(status_code=400, detail="Événement publié")
+    db.delete(_get_shift_or_404(db, event_id, shift_id))
+    db.commit()
+
+
+def _check_shift_slot(
+    db: Session, event_id: int, creneau_id: int, shift_custom_id
+) -> None:
+    """Un shift custom doit appartenir à l'event ET au créneau de l'affectation."""
+    if shift_custom_id is None:
+        return
+    sc = _get_shift_or_404(db, event_id, shift_custom_id)
+    if sc.creneau_id != creneau_id:
+        raise HTTPException(
+            status_code=422, detail="Ce shift custom n'est pas sur ce créneau"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Respos bar
 # ---------------------------------------------------------------------------
 
@@ -612,20 +747,23 @@ def add_assignment(
     _: Member = Depends(require_bureau),
 ):
     _get_event_or_404(db, event_id)
-    error = check_manual_assignment(db, event_id, payload.membre_id, payload.creneau_id)
-    if error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error)
+    # Pas de blocage sur dispo « no » : le bureau peut affecter quelqu'un qui
+    # s'est rendu dispo après coup (signalé par W8).
     slot = db.query(Slot).filter(
         Slot.id == payload.creneau_id, Slot.evenement_id == event_id
     ).first()
     if not slot:
         raise HTTPException(status_code=404, detail="Slot not found")
+    _check_shift_slot(db, event_id, payload.creneau_id, payload.shift_custom_id)
+    # Respo bar n'a de sens qu'au bar
+    atype = AssignmentTypeEnum.staff if payload.shift_custom_id else payload.type
     existing = db.query(Assignment).filter(
         Assignment.creneau_id == payload.creneau_id,
         Assignment.membre_id == payload.membre_id,
     ).first()
     if existing:
-        existing.type = payload.type
+        existing.type = atype
+        existing.shift_custom_id = payload.shift_custom_id
         existing.source = AssignmentSourceEnum.manuel
         db.commit()
         db.refresh(existing)
@@ -633,7 +771,8 @@ def add_assignment(
     asgn = Assignment(
         creneau_id=payload.creneau_id,
         membre_id=payload.membre_id,
-        type=payload.type,
+        type=atype,
+        shift_custom_id=payload.shift_custom_id,
         source=AssignmentSourceEnum.manuel,
     )
     db.add(asgn)
@@ -679,6 +818,11 @@ def update_assignment(
         asgn.type = payload.type
     if payload.maybe_force is not None:
         asgn.maybe_force = payload.maybe_force
+    if "shift_custom_id" in payload.model_fields_set:
+        _check_shift_slot(db, event_id, asgn.creneau_id, payload.shift_custom_id)
+        asgn.shift_custom_id = payload.shift_custom_id
+    if asgn.shift_custom_id is not None:
+        asgn.type = AssignmentTypeEnum.staff
     asgn.source = AssignmentSourceEnum.manuel
     db.commit()
     db.refresh(asgn)
@@ -809,6 +953,7 @@ def apply_proposal(
                 status_code=400,
                 detail=f"Créneau {a.creneau_id} n'appartient pas à cet événement",
             )
+        _check_shift_slot(db, event_id, a.creneau_id, a.shift_custom_id)
 
     db.query(Assignment).filter(
         Assignment.creneau_id.in_(slot_ids),
@@ -835,6 +980,7 @@ def apply_proposal(
             type=a.type,
             source=AssignmentSourceEnum.auto,
             maybe_force=a.maybe_force,
+            shift_custom_id=a.shift_custom_id,
         ))
 
     event.excluded_member_ids = body.excluded_member_ids

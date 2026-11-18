@@ -77,6 +77,19 @@
   color: #b91c1c !important;
 }
 
+.cell-custom {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* Affecté·e sans dispo yes/maybe (W8) */
+.planning-table tbody td.cell-forced {
+  outline: 2px dashed var(--amber);
+  outline-offset: -3px;
+}
+
 .bureau-dot {
   display: inline-block;
   width: 6px;

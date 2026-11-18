@@ -6,7 +6,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from ..core.deps import get_current_member, get_db
-from ..models.models import Assignment, Member, Slot
+from ..models.models import Assignment, Member, ShiftCustom, Slot
 from ..routers.events import _get_event_or_404
 from ..services.export_img import export_planning_png
 from ..services.logo_theme import logo_et_theme
@@ -36,8 +36,13 @@ def export_png(
     members.sort(key=lambda m: (m.nom, m.prenom))
 
     logo_png, theme = logo_et_theme(db, event)
+    shift_names = {
+        sc.id: sc.nom
+        for sc in db.query(ShiftCustom).filter(ShiftCustom.evenement_id == event_id)
+    }
     png_bytes = export_planning_png(
-        event, slots, members, assignments, logo_png=logo_png, theme=theme
+        event, slots, members, assignments, logo_png=logo_png, theme=theme,
+        shift_names=shift_names,
     )
     return Response(
         content=png_bytes,
