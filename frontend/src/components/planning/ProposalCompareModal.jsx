@@ -10,7 +10,8 @@ const VARIANT_LABELS = ['A', 'B', 'C']
  * Génère 3 propositions côté serveur (sans écrire en base), surligne les
  * affectations qui diffèrent entre variantes, et applique celle choisie.
  */
-export default function ProposalCompareModal({ eventId, slots, members, excludedMemberIds, onApply, onClose }) {
+export default function ProposalCompareModal({ eventId, slots, members, shiftsCustom = [], excludedMemberIds, onApply, onClose }) {
+  const shiftName = (id) => shiftsCustom.find((sc) => sc.id === id)?.nom ?? 'Autre'
   const [loading, setLoading] = useState(true)
   const [applying, setApplying] = useState(null)
   const [proposals, setProposals] = useState([])
@@ -44,11 +45,11 @@ export default function ProposalCompareModal({ eventId, slots, members, excluded
 
   // Une affectation « diffère » si elle n'apparaît pas dans TOUTES les variantes
   const keySets = useMemo(
-    () => proposals.map((p) => new Set(p.assignments.map((a) => `${a.creneau_id}-${a.membre_id}-${a.type}`))),
+    () => proposals.map((p) => new Set(p.assignments.map((a) => `${a.creneau_id}-${a.membre_id}-${a.type}-${a.shift_custom_id}`))),
     [proposals]
   )
   const isDiff = (a) => {
-    const key = `${a.creneau_id}-${a.membre_id}-${a.type}`
+    const key = `${a.creneau_id}-${a.membre_id}-${a.type}-${a.shift_custom_id}`
     return !keySets.every((set) => set.has(key))
   }
 
@@ -174,18 +175,19 @@ export default function ProposalCompareModal({ eventId, slots, members, excluded
                             {sortedSlots.map((s) => {
                               const a = proposalMaps[pi]?.cells[`${s.id}-${m.id}`]
                               const respo = a?.type === 'respo_bar'
+                              const custom = a?.shift_custom_id != null
                               return (
                                 <td
                                   key={s.id}
-                                  className={a ? (respo ? 'cell-respo' : 'cell-staff') : ''}
-                                  title={a ? (respo ? 'Respo bar' : 'Staff') : undefined}
+                                  className={a ? (custom ? 'cell-custom' : respo ? 'cell-respo' : 'cell-staff') : ''}
+                                  title={a ? (custom ? shiftName(a.shift_custom_id) : respo ? 'Respo bar' : 'Staff') : undefined}
                                   style={{
                                     position: 'relative',
                                     outline: a && isDiff(a) ? '1px dashed var(--violet)' : 'none',
                                     outlineOffset: -2,
                                   }}
                                 >
-                                  {a ? (respo ? 'R' : 'S') : ''}
+                                  {a ? (custom ? shiftName(a.shift_custom_id)[0].toUpperCase() : respo ? 'R' : 'S') : ''}
                                   {a?.source === 'manuel' && (
                                     <span className="manual-dot" title="Affectation manuelle (conservée)" />
                                   )}

@@ -1,10 +1,10 @@
 /**
- * Recalcule les warnings W1–W7 à partir de l'état courant du planning,
+ * Recalcule les warnings W1–W8 à partir de l'état courant du planning,
  * pour qu'ils restent justes après les ajustements manuels (les warnings
  * retournés par la génération deviennent obsolètes dès la première édition).
  * Mêmes codes que le backend (scheduler.py) → réutilisés par WarningsList.
  */
-export function computeWarnings({ event, slots, assignments, members, availabilities, affinities }) {
+export function computeWarnings({ event, slots, assignments, members, availabilities, affinities, shiftsCustom = [] }) {
   const warnings = []
   const sorted = [...slots].sort((a, b) => new Date(a.heure_debut) - new Date(b.heure_debut))
   const fmt = (dt) => new Date(dt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
@@ -25,8 +25,11 @@ export function computeWarnings({ event, slots, assignments, members, availabili
   }
   const availMap = new Map(availabilities.map((a) => [`${a.membre_id}-${a.creneau_id}`, a.statut]))
 
+  const isBureau = (a) => memberMap.get(a.membre_id)?.roles?.includes('bureau')
+
   for (const s of sorted) {
-    const asgns = bySlot.get(s.id) || []
+    const allAsgns = bySlot.get(s.id) || []
+    const asgns = allAsgns.filter((a) => a.shift_custom_id == null) // bar
     if (asgns.length < s.max_personnes) {
       warnings.push({
         type: 'slot_understaffed', slot_id: s.id, member_id: null,
@@ -39,17 +42,39 @@ export function computeWarnings({ event, slots, assignments, members, availabili
         message: `Créneau ${fmt(s.heure_debut)} : aucun respo bar (W1)`,
       })
     }
-    if (asgns.length > 0 && !asgns.some((a) => memberMap.get(a.membre_id)?.roles?.includes('bureau'))) {
+    if (asgns.length > 0 && !asgns.some(isBureau)) {
       warnings.push({
         type: 'no_bureau', slot_id: s.id, member_id: null,
         message: `Créneau ${fmt(s.heure_debut)} : aucun membre bureau (W3)`,
       })
     }
-    for (const a of asgns) {
-      if (availMap.get(`${a.membre_id}-${a.creneau_id}`) === 'maybe') {
+    // W2/W3 par shift custom (entrée…) sur ce créneau
+    for (const sc of shiftsCustom.filter((x) => x.creneau_id === s.id)) {
+      const onSc = allAsgns.filter((a) => a.shift_custom_id === sc.id)
+      if (onSc.length < sc.max_personnes) {
+        warnings.push({
+          type: 'slot_understaffed', slot_id: s.id, member_id: null, shift_custom_id: sc.id,
+          message: `${sc.nom} ${fmt(s.heure_debut)} : ${onSc.length}/${sc.max_personnes} staffé·e·s (W2)`,
+        })
+      }
+      if (!onSc.some(isBureau)) {
+        warnings.push({
+          type: 'no_bureau', slot_id: s.id, member_id: null, shift_custom_id: sc.id,
+          message: `${sc.nom} ${fmt(s.heure_debut)} : aucun membre bureau (W3)`,
+        })
+      }
+    }
+    for (const a of allAsgns) {
+      const dispo = availMap.get(`${a.membre_id}-${a.creneau_id}`)
+      if (dispo === 'maybe') {
         warnings.push({
           type: 'maybe_forced', slot_id: s.id, member_id: a.membre_id,
           message: `Créneau ${fmt(s.heure_debut)} : ${name(a.membre_id)} placé sur « peut-être » (W5)`,
+        })
+      } else if (dispo !== 'yes') {
+        warnings.push({
+          type: 'unavailable_forced', slot_id: s.id, member_id: a.membre_id,
+          message: `Créneau ${fmt(s.heure_debut)} : ${name(a.membre_id)} affecté·e sans être dispo (W8)`,
         })
       }
     }
@@ -79,10 +104,11 @@ export function computeWarnings({ event, slots, assignments, members, availabili
     }
   }
 
-  // W6 : affinité satisfaite si les deux membres partagent au moins un créneau
+  // W6 : affinité satisfaite si les deux membres partagent un créneau sur le même poste
+  const post = (a) => `${a.creneau_id}-${a.shift_custom_id ?? 'bar'}`
   for (const aff of affinities || []) {
-    const slotsA = new Set((byMember.get(aff.membre_a_id) || []).map((a) => a.creneau_id))
-    const together = (byMember.get(aff.membre_b_id) || []).some((a) => slotsA.has(a.creneau_id))
+    const slotsA = new Set((byMember.get(aff.membre_a_id) || []).map(post))
+    const together = (byMember.get(aff.membre_b_id) || []).some((a) => slotsA.has(post(a)))
     if (!together) {
       warnings.push({
         type: 'affinity_unsatisfied', slot_id: null, member_id: aff.membre_a_id,

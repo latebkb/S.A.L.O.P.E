@@ -45,6 +45,15 @@ export const eventsApi = {
   deleteSlot: (eventId, slotId) =>
     client.delete(`/events/${eventId}/slots/${slotId}`),
 
+  // Shifts custom (entrée…)
+  listShiftsCustom: (id) => client.get(`/events/${id}/shifts-custom`).then((r) => r.data),
+  createShiftsCustom: (id, payload) =>
+    client.post(`/events/${id}/shifts-custom`, payload).then((r) => r.data),
+  updateShiftCustom: (eventId, shiftId, payload) =>
+    client.put(`/events/${eventId}/shifts-custom/${shiftId}`, payload).then((r) => r.data),
+  deleteShiftCustom: (eventId, shiftId) =>
+    client.delete(`/events/${eventId}/shifts-custom/${shiftId}`),
+
   // Respos bar
   listResposBar: (id) => client.get(`/events/${id}/respos-bar`).then((r) => r.data),
   setResposBar: (id, respos) =>

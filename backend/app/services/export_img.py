@@ -43,13 +43,15 @@ LATEB_THEME = {
     "respo_text": (255, 255, 255),
     "staff": (253, 196, 14),        # jaune bière du logo (#fdc40e)
     "staff_text": (74, 42, 6),
+    "custom": (122, 74, 18),        # brun du logo : shifts custom (entrée…)
+    "custom_text": (255, 255, 255),
     "shadow": (122, 74, 18),
 }
 SHADOW_ALPHA = 40
 
 # Les bulles de shift gardent toujours les couleurs LATEB, quel que soit le
 # thème du logo : seul l'habillage (cadre, fond, textes, bandeaux) change.
-SHIFT_KEYS = ("respo", "respo_text", "staff", "staff_text")
+SHIFT_KEYS = ("respo", "respo_text", "staff", "staff_text", "custom", "custom_text")
 
 FRAME = 6
 MARGIN = 32
@@ -131,15 +133,20 @@ def export_planning_png(
     assignments_db: List[Assignment],
     logo_png: bytes | None = None,
     theme: Dict[str, Tuple[int, int, int]] | None = None,
+    shift_names: Dict[int, str] | None = None,
 ) -> bytes:
     """
     Render the planning as a PNG image and return the raw bytes.
     """
     t = {**(theme or LATEB_THEME), **{k: LATEB_THEME[k] for k in SHIFT_KEYS}}
-    asgn_map: Dict[Tuple[int, int], str] = {}
+    # Valeur : type bar ("staff"/"respo_bar") ou ("custom", nom du shift)
+    asgn_map: Dict[Tuple[int, int], object] = {}
     slot_counts: Dict[int, int] = {}
     for a in assignments_db:
-        asgn_map[(a.membre_id, a.creneau_id)] = a.type.value
+        asgn_map[(a.membre_id, a.creneau_id)] = (
+            ("custom", (shift_names or {}).get(a.shift_custom_id, "Autre"))
+            if a.shift_custom_id is not None else a.type.value
+        )
         slot_counts[a.creneau_id] = slot_counts.get(a.creneau_id, 0) + 1
 
     assigned_member_ids = {a.membre_id for a in assignments_db}
@@ -305,6 +312,8 @@ def export_planning_png(
                 fill, text_color, label = t["respo"], t["respo_text"], "Respo bar"
             elif asgn_type == AssignmentTypeEnum.staff.value:
                 fill, text_color, label = t["staff"], t["staff_text"], "Staff"
+            elif isinstance(asgn_type, tuple):
+                fill, text_color, label = t["custom"], t["custom_text"], asgn_type[1]
             else:
                 i += 1
                 continue

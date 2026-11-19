@@ -40,6 +40,7 @@ export default function EventDetailPage() {
   const [slots, setSlots] = useState([])
   const [members, setMembers] = useState([])
   const [assignments, setAssignments] = useState([])
+  const [shiftsCustom, setShiftsCustom] = useState([])
   const [affinities, setAffinities] = useState([])
   const [resposBar, setResposBar] = useState([])
   const [availabilities, setAvailabilities] = useState([])
@@ -83,12 +84,15 @@ export default function EventDetailPage() {
       let current = assignments
       for (const op of ops) {
         if (op.op === 'add') {
-          await eventsApi.addAssignment(id, { creneau_id: op.creneau_id, membre_id: op.membre_id, type: op.type })
+          await eventsApi.addAssignment(id, {
+            creneau_id: op.creneau_id, membre_id: op.membre_id, type: op.type,
+            shift_custom_id: op.shift_custom_id ?? null,
+          })
         } else {
           const a = current.find((x) => x.creneau_id === op.creneau_id && x.membre_id === op.membre_id)
           if (!a) continue
           if (op.op === 'delete') await eventsApi.deleteAssignment(id, a.id)
-          else await eventsApi.updateAssignment(id, a.id, { type: op.type })
+          else await eventsApi.updateAssignment(id, a.id, { type: op.type, shift_custom_id: op.shift_custom_id ?? null })
         }
       }
       const fresh = await eventsApi.listAssignments(id)
@@ -114,7 +118,7 @@ export default function EventDetailPage() {
   })
 
   const reload = async () => {
-    const [ev, sl, asgn, aff, rb, mem, avs] = await Promise.all([
+    const [ev, sl, asgn, aff, rb, mem, avs, sc] = await Promise.all([
       eventsApi.get(id),
       eventsApi.listSlots(id),
       eventsApi.listAssignments(id),
@@ -122,6 +126,7 @@ export default function EventDetailPage() {
       eventsApi.listResposBar(id),
       membersApi.list(),
       eventsApi.listAvailabilities(id),
+      eventsApi.listShiftsCustom(id),
     ])
     setEvent(ev)
     setSlots(sl.sort((a, b) => new Date(a.heure_debut) - new Date(b.heure_debut)))
@@ -130,6 +135,7 @@ export default function EventDetailPage() {
     setResposBar(rb)
     setMembers(mem)
     setAvailabilities(avs)
+    setShiftsCustom(sc)
     setExcludedMemberIds(new Set(ev.excluded_member_ids || []))
     clearUndo()
     setLoading(false)
@@ -246,13 +252,13 @@ export default function EventDetailPage() {
     }
   }
 
-  // Warnings W1-W7 recalculés en continu (restent justes après édition manuelle)
+  // Warnings W1-W8 recalculés en continu (restent justes après édition manuelle)
   const liveWarnings = useMemo(
     () =>
       !event || assignments.length === 0
         ? []
-        : computeWarnings({ event, slots, assignments, members, availabilities, affinities }),
-    [event, slots, assignments, members, availabilities, affinities]
+        : computeWarnings({ event, slots, assignments, members, availabilities, affinities, shiftsCustom }),
+    [event, slots, assignments, members, availabilities, affinities, shiftsCustom]
   )
 
   const handleWarningSelect = (w) => {
@@ -286,7 +292,9 @@ export default function EventDetailPage() {
   const doneCount = visibleTabs.filter((t) => tabDone[t]).length
 
   const slotCounts = {}
-  for (const a of assignments) slotCounts[a.creneau_id] = (slotCounts[a.creneau_id] || 0) + 1
+  for (const a of assignments) {
+    if (a.shift_custom_id == null) slotCounts[a.creneau_id] = (slotCounts[a.creneau_id] || 0) + 1
+  }
   const understaffedSlots = slots.filter((s) => (slotCounts[s.id] || 0) < s.max_personnes)
   const fmtTime = (dt) => new Date(dt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', hour12: false })
 
@@ -477,6 +485,7 @@ export default function EventDetailPage() {
       {tab === 'config' && (
         <SlotConfig
           slots={slots}
+          shiftsCustom={shiftsCustom}
           eventId={id}
           onSaved={async () => { await reload(); advanceFrom('config') }}
           disabled={!isBureau || isPublished}
@@ -537,6 +546,7 @@ export default function EventDetailPage() {
             slots={slots}
             members={members}
             assignments={assignments}
+            shiftsCustom={shiftsCustom}
             affinities={affinities}
             availabilities={availabilities}
             excludedMemberIds={excludedMemberIds}
@@ -558,6 +568,7 @@ export default function EventDetailPage() {
           eventId={id}
           slots={slots}
           members={members}
+          shiftsCustom={shiftsCustom}
           excludedMemberIds={excludedMemberIds}
           onApply={handleApplyProposal}
           onClose={() => setShowProposals(false)}

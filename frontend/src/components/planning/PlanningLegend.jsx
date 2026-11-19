@@ -20,6 +20,14 @@ export default function PlanningLegend() {
         Respo bar
       </div>
       <div style={item}>
+        <span style={swatch('var(--accent-soft)', 'var(--accent)')} />
+        Shift custom (entrée…)
+      </div>
+      <div style={item}>
+        <span style={swatch('transparent', 'var(--amber)')} />
+        Affecté·e sans dispo
+      </div>
+      <div style={item}>
         <span style={swatch('rgba(52, 199, 123, 0.10)', 'var(--border)')} />
         Disponible
       </div>

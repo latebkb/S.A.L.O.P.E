@@ -184,6 +184,26 @@ class SlotsBulkCreate(BaseModel):
     max_personnes: int = Field(default=3, ge=1, le=99)
 
 
+class ShiftCustomRead(BaseModel):
+    id: int
+    evenement_id: int
+    creneau_id: int
+    nom: str
+    max_personnes: int
+
+    model_config = {"from_attributes": True}
+
+
+class ShiftCustomCreate(BaseModel):
+    nom: str = Field(min_length=1, max_length=40)
+    creneau_ids: List[int] = Field(min_length=1, max_length=100)
+    max_personnes: int = Field(default=1, ge=1, le=99)
+
+
+class ShiftCustomUpdate(BaseModel):
+    max_personnes: int = Field(ge=1, le=99)
+
+
 # ---------------------------------------------------------------------------
 # Availability
 # ---------------------------------------------------------------------------
@@ -300,6 +320,7 @@ class AssignmentRead(BaseModel):
     type: AssignmentTypeEnum
     source: AssignmentSourceEnum
     maybe_force: bool
+    shift_custom_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -309,11 +330,14 @@ class AssignmentCreate(BaseModel):
     membre_id: int
     type: AssignmentTypeEnum = AssignmentTypeEnum.staff
     source: AssignmentSourceEnum = AssignmentSourceEnum.manuel
+    shift_custom_id: Optional[int] = None
 
 
 class AssignmentUpdate(BaseModel):
     type: Optional[AssignmentTypeEnum] = None
     maybe_force: Optional[bool] = None
+    # Absent = inchangé ; null explicite = retour au bar
+    shift_custom_id: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +367,7 @@ class ProposalAssignment(BaseModel):
     type: AssignmentTypeEnum
     source: AssignmentSourceEnum
     maybe_force: bool = False
+    shift_custom_id: Optional[int] = None
 
 
 class ProposalItem(BaseModel):

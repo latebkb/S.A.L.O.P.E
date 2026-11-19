@@ -8,6 +8,7 @@ const WARNING_LABELS = {
   slot_understaffed: 'Créneau sous-effectif',
   no_bureau: 'Aucun membre bureau',
   maybe_forced: 'Disponibilité "maybe" forcée',
+  unavailable_forced: 'Affecté·e sans être dispo',
   affinity_unsatisfied: 'Affinité non satisfaite',
   over_quota: 'Quota dépassé (escalade)',
   long_pause: 'Pause 2h entre blocs (info)',
@@ -18,6 +19,7 @@ const WARNING_STYLE = {
   no_respo_bar: { bg: 'var(--red-soft)', border: 'rgba(240, 82, 82,0.2)', color: 'var(--red)', Icon: IconAlertCircle },
   slot_understaffed: { bg: 'var(--amber-soft)', border: 'rgba(245, 158, 11,0.2)', color: 'var(--amber)', Icon: IconAlertTriangle },
   maybe_forced: { bg: 'var(--amber-soft)', border: 'rgba(245, 158, 11,0.2)', color: 'var(--amber)', Icon: IconAlertTriangle },
+  unavailable_forced: { bg: 'var(--amber-soft)', border: 'rgba(245, 158, 11,0.2)', color: 'var(--amber)', Icon: IconAlertTriangle },
   over_quota: { bg: 'var(--red-soft)', border: 'rgba(240, 82, 82,0.2)', color: 'var(--red)', Icon: IconAlertCircle },
   no_bureau: { bg: 'var(--accent-soft)', border: 'rgba(91, 127, 166,0.2)', color: 'var(--accent)', Icon: IconInfoCircle },
   affinity_unsatisfied: { bg: 'var(--violet-soft)', border: 'rgba(124, 106, 247,0.2)', color: 'var(--violet)', Icon: IconInfoCircle },
@@ -97,6 +99,7 @@ export default function WarningsList({
     if (w.type === 'slot_understaffed') {
       const items = dispoCandidates(w.slot_id).map((c) => ({
         kind: 'add', type: 'staff', member: c.member, dispo: c.dispo, creneau_id: w.slot_id,
+        shift_custom_id: w.shift_custom_id ?? null,
       }))
       return items.length ? [{ label: 'Disponibles non placés', items }] : null
     }
@@ -124,6 +127,7 @@ export default function WarningsList({
     if (w.type === 'no_bureau') {
       const items = dispoCandidates(w.slot_id, (m) => m.roles?.includes('bureau')).map((c) => ({
         kind: 'add', type: 'staff', member: c.member, dispo: c.dispo, creneau_id: w.slot_id,
+        shift_custom_id: w.shift_custom_id ?? null,
       }))
       return items.length ? [{ label: 'Bureau disponibles', items }] : null
     }
@@ -146,6 +150,7 @@ export default function WarningsList({
       } else {
         await eventsApi.addAssignment(eventId, {
           creneau_id: item.creneau_id, membre_id: item.member.id, type: item.type,
+          shift_custom_id: item.shift_custom_id ?? null,
         })
         onUndoableAction?.([{ op: 'delete', creneau_id: item.creneau_id, membre_id: item.member.id }])
       }

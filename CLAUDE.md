@@ -58,7 +58,7 @@ Stack monorepo : `frontend/` (React 18 + Vite + Tailwind) et `backend/` (FastAPI
 - **`app/services/csv_import.py`** : parsing CSV Strawpoll + fuzzy matching (RapidFuzz) + gestion pending
 - **`app/services/public_poll.py`** : logique formulaire public (soumission, résolution pending)
 - **`app/services/historical_img_import.py`** : OCR Tesseract + détection grille + fuzzy matching noms
-- **`alembic/versions/`** : 8 migrations (001 → 008)
+- **`alembic/versions/`** : 12 migrations (001 → 012)
 
 ### Frontend
 
@@ -66,7 +66,7 @@ Stack monorepo : `frontend/` (React 18 + Vite + Tailwind) et `backend/` (FastAPI
 - **`src/api/client.js`** : instance axios avec intercepteurs (cookies JWT, toasts d'erreur automatiques)
 - **`src/pages/EventDetailPage.jsx`** : page principale du workflow (6 onglets : Disponibilités → Créneaux → Respos → Affinités → Participants → Planning)
 - **`src/components/planning/PlanningGrid.jsx`** : grille cliquable (modifier/supprimer affectation, stack undo côté client)
-- **`src/utils/computeWarnings.js`** : calcul des warnings W1-W7 côté client
+- **`src/utils/computeWarnings.js`** : calcul des warnings W1-W8 côté client
 
 ### Flux de données principal
 
@@ -94,10 +94,12 @@ Login Google OIDC (`/api/auth/google/login` → callback, `services/google_auth.
 - `Assignment.maybe_force` indique qu'un membre a été affecté malgré une dispo `maybe`.
 - `PendingSubmission` est la table tampon pour les noms non reconnus du formulaire public ou du CSV — `nom_normalise` est la clé d'unicité (pas `nom_saisi`).
 - `Event.excluded_member_ids` (ARRAY int) — les membres exclus sont ignorés par le solveur CP-SAT.
+- `ShiftCustom` = poste parallèle au bar (ex. « Entrée ») sur un créneau existant, une ligne par (créneau, `nom`). `Assignment.shift_custom_id` NULL = bar. Les dispos du créneau valent pour tous les postes ; `uq_assignment(creneau_id, membre_id)` garantit 1 poste/heure.
+- L'affectation manuelle n'est jamais bloquée par la dispo (« no » ou sans réponse) : signalée par W8.
 
 ### Solveur CP-SAT (`scheduler.py`)
 
-Deux modes : `generate` (résout et persiste directement) et `generate-proposals` (calcule 2-3 variantes sans écrire, `apply-proposal` choisit). Timeout 10 s. Contrainte dure : `max_personnes` par slot. Pénalités pondérées : créneau sans respo bar, sans bureau, sous-staffé, quota dépassé (> 2 h), dispo `maybe` utilisée, affinité insatisfaite, pause longue (≥ 3 h).
+Deux modes : `generate` (résout et persiste directement) et `generate-proposals` (calcule 2-3 variantes sans écrire, `apply-proposal` choisit). Timeout 10 s. Contrainte dure : `max_personnes` par slot. Pénalités pondérées : créneau sans respo bar, sans bureau, sous-staffé, quota dépassé (> 2 h), dispo `maybe` utilisée, affinité insatisfaite, pause longue (≥ 3 h). Shifts custom : variables `y` à côté de `x` (bar), `x + Σy ≤ 1` par heure, pénalités par membre sur `w = x + Σy` ; place vide 3000 (< 10000 bar → bar d'abord), sans bureau 500.
 
 ### Conventions
 

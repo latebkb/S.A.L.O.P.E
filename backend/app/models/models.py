@@ -134,6 +134,10 @@ class Event(Base):
     affinity_constraints = relationship(
         "AffinityConstraint", back_populates="event", cascade="all, delete-orphan"
     )
+    shifts_custom = relationship(
+        "ShiftCustom", back_populates="event", cascade="all, delete-orphan",
+        passive_deletes=True,  # laisse la cascade DB (sinon double suppression des assignments)
+    )
     pending_submissions = relationship(
         "PendingSubmission", back_populates="event", cascade="all, delete-orphan"
     )
@@ -230,12 +234,42 @@ class Assignment(Base):
         default=AssignmentSourceEnum.auto,
     )
     maybe_force = Column(Boolean, nullable=False, default=False)
+    # NULL = poste bar ; sinon shift custom (ex. entrée) sur ce même créneau
+    shift_custom_id = Column(
+        Integer, ForeignKey("shifts_custom.id", ondelete="CASCADE"), nullable=True
+    )
 
     slot = relationship("Slot", back_populates="assignments")
     member = relationship("Member", back_populates="assignments")
 
     __table_args__ = (
         UniqueConstraint("creneau_id", "membre_id", name="uq_assignment"),
+    )
+
+
+class ShiftCustom(Base):
+    """Poste parallèle au bar (ex. « Entrée ») sur un créneau existant.
+
+    Un shift « Entrée 22h-01h » = une ligne par créneau, regroupées par `nom`.
+    Les dispos du créneau bar s'appliquent : un membre est au bar OU sur un
+    shift custom à une heure donnée (garanti par uq_assignment).
+    """
+    __tablename__ = "shifts_custom"
+
+    id = Column(Integer, primary_key=True, index=True)
+    evenement_id = Column(
+        Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    creneau_id = Column(
+        Integer, ForeignKey("slots.id", ondelete="CASCADE"), nullable=False
+    )
+    nom = Column(String, nullable=False)
+    max_personnes = Column(Integer, nullable=False, default=1)
+
+    event = relationship("Event", back_populates="shifts_custom")
+
+    __table_args__ = (
+        UniqueConstraint("creneau_id", "nom", name="uq_shift_custom"),
     )
 
 
